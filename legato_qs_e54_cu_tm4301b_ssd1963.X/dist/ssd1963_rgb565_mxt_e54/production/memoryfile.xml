@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <executable name="dist/ssd1963_rgb565_mxt_e54/production/legato_qs_e54_cu_tm4301b_ssd1963.X.production.elf">
+    <memory name="program">
+      <units>bytes</units>
+      <length>1048576</length>
+      <used>722053</used>
+      <free>326523</free>
+    </memory>
+    <memory name="data">
+      <units>bytes</units>
+      <length>262144</length>
+      <used>104616</used>
+      <free>157528</free>
+    </memory>
+  </executable>
+</project>
