@@ -96,11 +96,10 @@ typedef enum
 
 LCD_STATES lcd_state = LCD_WAIT_TOUCH;
 bool sendData = false;
-char server_state[20];
+char server_state[40];
 /* TODO:  Add any necessary local functions.
 */
-
-void selectImage(uint32_t gS);
+void selectImage(uint32_t gS, const char* source);
 
 void touchDownHandler(const SYS_INP_TouchStateEvent* const evt)
 {
@@ -127,7 +126,7 @@ void touchDownHandler(const SYS_INP_TouchStateEvent* const evt)
     }
 
     // 이미지 업데이트 및 상태 메시지 전송을 selectImage 함수로 일원화합니다.
-    selectImage(!gSelectedImg);
+    selectImage(!gSelectedImg, "_from display");
 
     // 타이머를 시작합니다.
     RTC_Timer32Start();
@@ -153,25 +152,25 @@ void timeout_handler( RTC_TIMER32_INT_MASK intCause, uintptr_t context ) // call
         SYS_CONSOLE_MESSAGE("led off \r\n");
 }
 
-void selectImage(uint32_t gS)
+void selectImage(uint32_t gS, const char* source)
 {
     // 이미지 상태가 변경되지 않았으면 아무 작업도 하지 않고 반환합니다.
-    if (gSelectedImg == gS)
-    {
-        // 상태가 동일하므로 메시지를 보낼 필요가 없습니다.
-        return;
-    }
+    // if (gSelectedImg == gS)
+    // {
+    //     // 상태가 동일하므로 메시지를 보낼 필요가 없습니다.
+    //     return;
+    // }
 
     // 이미지 상태를 gS 값으로 설정합니다.
     gSelectedImg = gS;
 
     if ( gS ) {
         Screen0_ImageWidget_0->fn->setImage(Screen0_ImageWidget_0, (leImage*)&imgDoorOpen);
-        strcpy(server_state, "server state_open");
+        sprintf(server_state, "server state_open%s", source);
     }
     else {
         Screen0_ImageWidget_0->fn->setImage(Screen0_ImageWidget_0, (leImage*)&imgDoorClose);
-        strcpy(server_state, "server state_close");
+        sprintf(server_state, "server state_close%s", source);
     }
     Screen0_ImageWidget_0->fn->update(Screen0_ImageWidget_0, 0) ;
 
@@ -405,14 +404,31 @@ void APP_Tasks ( void )
 
                 SYS_CONSOLE_PRINT("\tReceived a message of '%s' and length %d\r\n", AppBuffer, rxed);
 
+                const char* source_suffix = "";
+                char ip_buffer[20];
+                TCPIP_Helper_IPAddressToString(&sktInfo.remoteIPaddress.v4Add, ip_buffer, sizeof(ip_buffer));
+                if (strcmp(ip_buffer, "192.168.100.12") == 0)
+                {
+                    source_suffix = "_from key";
+                }
+                else if (strcmp(ip_buffer, "192.168.100.15") == 0)
+                {
+                    source_suffix = "_from app";
+                }
+                else
+                { 
+                    source_suffix = "";
+                }
+
                 if (strcmp((char *)AppBuffer, "button111 pressed_from Client") == 0)
                 {
+                    
                     SYS_CONSOLE_PRINT("\t\tbutton1 pressed!!!\r\n");
-                    selectImage(1); // Open
+                    selectImage(1, source_suffix); // Open
                 }
                 else
                 {
-                    selectImage(0); // Close
+                    selectImage(0, source_suffix); // Close
                 }
             
 
