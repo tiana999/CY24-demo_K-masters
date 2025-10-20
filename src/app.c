@@ -118,11 +118,15 @@ void touchDownHandler(const SYS_INP_TouchStateEvent* const evt)
     
     if(appData.socket != INVALID_SOCKET)
     {
-        TCPIP_Helper_StringToIPAddress("192.168.100.12", &clientIPv4);
-        TCPIP_UDP_DestinationPortSet(appData.socket, CLIENT_12_PORT);
-        TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&clientIPv4);
-        TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)lcdMessageBuffer, strlen(lcdMessageBuffer));
-        TCPIP_UDP_Flush(appData.socket);
+        size_t messageLen = strlen(lcdMessageBuffer);
+        if (TCPIP_UDP_PutIsReady(appData.socket) >= messageLen)
+        {
+            TCPIP_Helper_StringToIPAddress("192.168.100.12", &clientIPv4);
+            TCPIP_UDP_DestinationPortSet(appData.socket, CLIENT_12_PORT);
+            TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&clientIPv4);
+            TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)lcdMessageBuffer, messageLen);
+            TCPIP_UDP_Flush(appData.socket);
+        }
     }
 
     // 이미지 업데이트 및 상태 메시지 전송을 selectImage 함수로 일원화합니다.
@@ -140,13 +144,17 @@ void timeout_handler( RTC_TIMER32_INT_MASK intCause, uintptr_t context ) // call
         char systick_buffer[255];
         strcpy(systick_buffer, "led off");
         if(appData.socket != INVALID_SOCKET)
-        {
-            TCPIP_Helper_StringToIPAddress("192.168.100.12", &clientIPv4);
-            TCPIP_UDP_DestinationPortSet(appData.socket, CLIENT_12_PORT);
-            // 기존 서버 소켓의 목적지 IP를 동적으로 변경
-            TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&clientIPv4);
-            TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)systick_buffer, strlen(systick_buffer));
-            TCPIP_UDP_Flush(appData.socket);
+        {   
+            size_t messageLen = strlen(systick_buffer);
+            if (TCPIP_UDP_PutIsReady(appData.socket) >= messageLen)
+            {
+                TCPIP_Helper_StringToIPAddress("192.168.100.12", &clientIPv4);
+                TCPIP_UDP_DestinationPortSet(appData.socket, CLIENT_12_PORT);
+                // 기존 서버 소켓의 목적지 IP를 동적으로 변경
+                TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&clientIPv4);
+                TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)systick_buffer, messageLen);
+                TCPIP_UDP_Flush(appData.socket);
+            }
         }
         
         SYS_CONSOLE_MESSAGE("led off \r\n");
@@ -228,17 +236,20 @@ void APP_Tasks ( void )
     /* Check the application's current state. */
 
     // 192.168.100.15 클라이언트로 상태 메시지를 보냅니다.
-    if (sendStateToClient15 && appData.socket != INVALID_SOCKET && TCPIP_UDP_PutIsReady(appData.socket) >= strlen(server_state))
+    if (sendStateToClient15 && appData.socket != INVALID_SOCKET)
     {
-        TCPIP_Helper_StringToIPAddress("192.168.100.15", &clientIPv4);
-        // 기존 서버 소켓의 목적지 IP를 동적으로 변경
-        TCPIP_UDP_DestinationPortSet(appData.socket, CLIENT_15_PORT);
-        TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&clientIPv4);
-        TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)server_state, strlen(server_state));
-        TCPIP_UDP_Flush(appData.socket);
-
-        // 메시지를 보낸 후 플래그를 리셋합니다.
-        sendStateToClient15 = false;
+        size_t messageLen = strlen(server_state);
+        if (TCPIP_UDP_PutIsReady(appData.socket) >= messageLen)
+        {
+            TCPIP_Helper_StringToIPAddress("192.168.100.15", &clientIPv4);
+            // 기존 서버 소켓의 목적지 IP를 동적으로 변경
+            TCPIP_UDP_DestinationPortSet(appData.socket, CLIENT_15_PORT);
+            TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&clientIPv4);
+            TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)server_state, messageLen);
+            TCPIP_UDP_Flush(appData.socket);
+            // 메시지를 보낸 후 플래그를 리셋합니다.
+            sendStateToClient15 = false;
+        }
     }
     
     switch ( appData.state )
