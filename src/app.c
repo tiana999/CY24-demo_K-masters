@@ -36,17 +36,32 @@
 #include "app.h"
 #include "gfx/legato/widget/image/legato_widget_image.h"
 
+// --- Constants for Network Configuration ---
 #define SERVER_PORT 9760
 #define CLIENT_15_PORT 9765 // 192.168.100.15 클라이언트의 수신 포트
 #define CLIENT_12_PORT 58954 // 192.168.100.12 클라이언트의 수신 포트
-// #define CLIENT_PORT 9761 // 클라이언트 소켓을 위한 포트 (서버와 달라야 함)
+
+#define CLIENT_12_IP "192.168.100.12"
+#define CLIENT_15_IP "192.168.100.15"
+
+// --- Constants for Messages ---
+static const char* CMD_FOR_12_GREEN_LED_ON = "opened";   // Command for 192.168.100.12 to turn Green LED ON
+static const char* CMD_FOR_12_RED_LED_ON = "closed";  // Command for 192.168.100.12 to turn Red LED ON
+static const char* CMD_FOR_12_ALL_LEDS_OFF = "led off"; // Command for 192.168.100.12 to turn all LEDs OFF
+static const char* MSG_SERVER_STATE_OPEN_FORMAT = "server state_open%s";
+static const char* MSG_SERVER_STATE_CLOSE_FORMAT = "server state_close%s";
+static const char* MSG_FROM_CLIENT_BUTTON_PRESS = "button111 pressed_from Client";
+
+// --- Buffer Sizes ---
+#define MAX_MESSAGE_BUFFER_SIZE 40
+#define MAX_IP_STRING_SIZE 20
+
 // *****************************************************************************
 // *****************************************************************************
 // Section: Global Data Definitions
 // *****************************************************************************
 // *****************************************************************************
 
-// *****************************************************************************
 /* Application Data
 
   Summary:
@@ -62,15 +77,12 @@
 */
 
 APP_DATA appData;
-uint32_t gSelectedImg ;
+bool isDoorOpen = false; // Replaced gSelectedImg for clarity
 SYS_INP_InputListener gAppInputListener;
 
-// 목적지 IP 주소를 저장하기 위한 변수
-// static UDP_SOCKET clientSocket = INVALID_SOCKET;
-static IPV4_ADDR clientIPv4;
-
-// 192.168.100.15 클라이언트로 상태를 보낼지 여부를 결정하는 플래그
-static bool sendStateToClient15 = false;
+// --- Private state variables ---
+static bool sendStateToClient15 = false; // Flag to send status to client 15
+static char serverStateMessage[MAX_MESSAGE_BUFFER_SIZE];
 
 // *****************************************************************************
 // *****************************************************************************
@@ -87,103 +99,145 @@ static bool sendStateToClient15 = false;
 // *****************************************************************************
 // *****************************************************************************
 
-typedef enum
-{
-    LCD_WAIT_TOUCH,
-    LCD_WAIT_CONNECTION
-
-} LCD_STATES;
-
-LCD_STATES lcd_state = LCD_WAIT_TOUCH;
-bool sendData = false;
-char server_state[40];
 /* TODO:  Add any necessary local functions.
 */
-void selectImage(uint32_t gS, const char* source);
+
+/**
+ * @brief Updates the door image on the UI based on the door's state.
+ * @param open True if the door is open, false otherwise.
+ */
+static void UpdateDoorImage(bool open)
+{
+    leImage* image = open ? (leImage*)&imgDoorOpen : (leImage*)&imgDoorClose;
+    Screen0_ImageWidget_0->fn->setImage(Screen0_ImageWidget_0, image);
+    Screen0_ImageWidget_0->fn->update(Screen0_ImageWidget_0, 0);
+}
+
+void updateDoorState(bool open, const char* source);
+
+static bool SendUdpMessage(const char* ipAddress, UDP_PORT port, const uint8_t* message, size_t length)
+{
+    if (appData.socket == INVALID_SOCKET || TCPIP_UDP_PutIsReady(appData.socket) < length)
+    {
+        return false;
+    }
+
+    IPV4_ADDR destIP;
+    TCPIP_Helper_StringToIPAddress(ipAddress, &destIP);
+
+    TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&destIP);
+    TCPIP_UDP_DestinationPortSet(appData.socket, port);
+    
+    TCPIP_UDP_ArrayPut(appData.socket, message, length);
+    TCPIP_UDP_Flush(appData.socket);
+    
+    return true;
+}
 
 void touchDownHandler(const SYS_INP_TouchStateEvent* const evt)
 {
-    
-
     // 192.168.100.12 클라이언트에게 상태를 전송합니다.
-    char lcdMessageBuffer[32];
-    if (gSelectedImg)
+    const char* ledCommand;
+    if (!isDoorOpen) // 문이 닫혀있다가 터치로 열릴 것이므로 LED ON 명령 전송
     {
-        strcpy(lcdMessageBuffer, "opened");
+        ledCommand = CMD_FOR_12_GREEN_LED_ON;
     }
     else
     {
-        strcpy(lcdMessageBuffer, "closed");
+        ledCommand = CMD_FOR_12_RED_LED_ON;
     }
-    
-    if(appData.socket != INVALID_SOCKET)
-    {
-        size_t messageLen = strlen(lcdMessageBuffer);
-        if (TCPIP_UDP_PutIsReady(appData.socket) >= messageLen)
-        {
-            TCPIP_Helper_StringToIPAddress("192.168.100.12", &clientIPv4);
-            TCPIP_UDP_DestinationPortSet(appData.socket, CLIENT_12_PORT);
-            TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&clientIPv4);
-            TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)lcdMessageBuffer, messageLen);
-            TCPIP_UDP_Flush(appData.socket);
-        }
-    }
+    SendUdpMessage(CLIENT_12_IP, CLIENT_12_PORT, (const uint8_t*)ledCommand, strlen(ledCommand));
 
     // 이미지 업데이트 및 상태 메시지 전송을 selectImage 함수로 일원화합니다.
-    selectImage(!gSelectedImg, "_from display");
+    updateDoorState(!isDoorOpen, "_from display");
 
     // 타이머를 시작합니다.
     RTC_Timer32Start();
 }
 
 
-void timeout_handler( RTC_TIMER32_INT_MASK intCause, uintptr_t context ) // called every 1ms
+void timeout_handler( RTC_TIMER32_INT_MASK intCause, uintptr_t context )
 {
     RTC_Timer32Stop();
             
-        char systick_buffer[255];
-        strcpy(systick_buffer, "led off");
-        if(appData.socket != INVALID_SOCKET)
-        {   
-            size_t messageLen = strlen(systick_buffer);
-            if (TCPIP_UDP_PutIsReady(appData.socket) >= messageLen)
-            {
-                TCPIP_Helper_StringToIPAddress("192.168.100.12", &clientIPv4);
-                TCPIP_UDP_DestinationPortSet(appData.socket, CLIENT_12_PORT);
-                // 기존 서버 소켓의 목적지 IP를 동적으로 변경
-                TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&clientIPv4);
-                TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)systick_buffer, messageLen);
-                TCPIP_UDP_Flush(appData.socket);
-            }
-        }
-        
+    if (SendUdpMessage(CLIENT_12_IP, CLIENT_12_PORT, (const uint8_t*)CMD_FOR_12_ALL_LEDS_OFF, strlen(CMD_FOR_12_ALL_LEDS_OFF)))
+    {
         SYS_CONSOLE_MESSAGE("led off \r\n");
+    }
 }
 
-void selectImage(uint32_t gS, const char* source)
+void updateDoorState(bool open, const char* source)
 {
     // 이미지 상태가 변경되지 않았으면 아무 작업도 하지 않고 반환합니다.
-    // if (gSelectedImg == gS)
+    // if (isDoorOpen == open)
     // {
-    //     // 상태가 동일하므로 메시지를 보낼 필요가 없습니다.
     //     return;
     // }
 
-    // 이미지 상태를 gS 값으로 설정합니다.
-    gSelectedImg = gS;
+    isDoorOpen = open;
 
-    if ( gS ) {
-        Screen0_ImageWidget_0->fn->setImage(Screen0_ImageWidget_0, (leImage*)&imgDoorOpen);
-        sprintf(server_state, "server state_open%s", source);
+    UpdateDoorImage(isDoorOpen);
+
+    if (isDoorOpen) {
+        sprintf(serverStateMessage, MSG_SERVER_STATE_OPEN_FORMAT, source);
+    } else {
+        sprintf(serverStateMessage, MSG_SERVER_STATE_CLOSE_FORMAT, source);
     }
-    else {
-        Screen0_ImageWidget_0->fn->setImage(Screen0_ImageWidget_0, (leImage*)&imgDoorClose);
-        sprintf(server_state, "server state_close%s", source);
-    }
-    Screen0_ImageWidget_0->fn->update(Screen0_ImageWidget_0, 0) ;
 
     // 192.168.100.15 클라이언트에게 서버 상태를 알려야 함을 표시합니다.
     sendStateToClient15 = true;
+}
+
+static const char* GetSourceSuffixFromIP(const char* ipAddress)
+{
+    if (strcmp(ipAddress, CLIENT_12_IP) == 0)
+    {
+        return "_from key";
+    }
+    else if (strcmp(ipAddress, CLIENT_15_IP) == 0)
+    {
+        return "_from app";
+    }
+    return ""; // Default: no suffix
+}
+
+static void ProcessUdpMessage(const uint8_t* buffer, const UDP_SOCKET_INFO* sktInfo)
+{
+    char ipBuffer[MAX_IP_STRING_SIZE];
+    TCPIP_Helper_IPAddressToString(&sktInfo->remoteIPaddress.v4Add, ipBuffer, sizeof(ipBuffer));
+    const char* sourceSuffix = GetSourceSuffixFromIP(ipBuffer);
+
+    if (strcmp((char *)buffer, MSG_FROM_CLIENT_BUTTON_PRESS) == 0)
+    {
+        SYS_CONSOLE_PRINT("\t\tbutton1 pressed!!!\r\n");
+        updateDoorState(true, sourceSuffix); // Open
+    }
+    else
+    {
+        updateDoorState(false, sourceSuffix); // Close
+    }
+}
+
+static void SendUdpResponse(const uint8_t* buffer, int length)
+{
+    const char* serverMessage = "\r\n message from server";
+    size_t serverMessageLen = strlen(serverMessage);
+    size_t totalLength = length + serverMessageLen;
+
+    // Check if there is enough space in the TX buffer before putting data.
+    if (TCPIP_UDP_PutIsReady(appData.socket) < totalLength)
+    {
+        SYS_CONSOLE_MESSAGE("\tUDP TX buffer is not ready for the response.\r\n");
+        return;
+    }
+
+    SYS_CONSOLE_PRINT("\tSending a response: '%.*s' and server message\r\n", length, buffer);
+
+    TCPIP_UDP_ArrayPut(appData.socket, buffer, length); // Echo back
+    TCPIP_UDP_ArrayPut(appData.socket, (const uint8_t*)serverMessage, serverMessageLen); // Additional server message
+
+    // Send all queued data for this response
+    TCPIP_UDP_Flush(appData.socket);
 }
 
 // *****************************************************************************
@@ -208,7 +262,6 @@ void APP_Initialize ( void )
 
     RTC_Timer32CallbackRegister(&timeout_handler, 0);
     RTC_Timer32InterruptEnable(RTC_TIMER32_INT_MASK_CMP0);
-//    SYSTICK_TimerStart();
 
     /* TODO: Initialize your application's state machine and other
      * parameters.
@@ -236,17 +289,10 @@ void APP_Tasks ( void )
     /* Check the application's current state. */
 
     // 192.168.100.15 클라이언트로 상태 메시지를 보냅니다.
-    if (sendStateToClient15 && appData.socket != INVALID_SOCKET)
+    if (sendStateToClient15)
     {
-        size_t messageLen = strlen(server_state);
-        if (TCPIP_UDP_PutIsReady(appData.socket) >= messageLen)
+        if (SendUdpMessage(CLIENT_15_IP, CLIENT_15_PORT, (const uint8_t*)serverStateMessage, strlen(serverStateMessage)))
         {
-            TCPIP_Helper_StringToIPAddress("192.168.100.15", &clientIPv4);
-            // 기존 서버 소켓의 목적지 IP를 동적으로 변경
-            TCPIP_UDP_DestinationPortSet(appData.socket, CLIENT_15_PORT);
-            TCPIP_UDP_DestinationIPAddressSet(appData.socket, IP_ADDRESS_TYPE_IPV4, (IP_MULTI_ADDRESS*)&clientIPv4);
-            TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)server_state, messageLen);
-            TCPIP_UDP_Flush(appData.socket);
             // 메시지를 보낸 후 플래그를 리셋합니다.
             sendStateToClient15 = false;
         }
@@ -360,7 +406,6 @@ void APP_Tasks ( void )
                 // We got a connection
                 appData.state = APP_TCPIP_SERVING_CONNECTION;
                 SYS_CONSOLE_MESSAGE("Received a connection\r\n");
-//                GPIO_PB03_Set();
             }
         }
         break;
@@ -374,106 +419,28 @@ void APP_Tasks ( void )
                 break;
             }
             
-            int16_t wMaxGet, wMaxPut, wCurrentChunk;
-            uint16_t w, w2;
-            uint8_t AppBuffer[32 + 1];
-            memset(AppBuffer, 0, sizeof(AppBuffer));
-            // Figure out how many bytes have been received and how many we can transmit.
-            wMaxGet = TCPIP_UDP_GetIsReady(appData.socket);	// Get UDP RX FIFO byte count
-            wMaxPut = TCPIP_UDP_PutIsReady(appData.socket);
+            int16_t wMaxGet;
+            uint8_t AppBuffer[MAX_MESSAGE_BUFFER_SIZE];
 
-            // 응답을 보내기 전에, 메시지를 보낸 클라이언트의 IP와 포트로 목적지를 다시 설정합니다.
-            UDP_SOCKET_INFO sktInfo;
-            TCPIP_UDP_SocketInfoGet(appData.socket, &sktInfo);
-            
-                       
-            //SYS_CONSOLE_PRINT("\t%d bytes are available.\r\n", wMaxGet);
-            if (wMaxGet == 0)
+            // Process all datagrams in the RX queue
+            if((wMaxGet = TCPIP_UDP_GetIsReady(appData.socket)) > 0)
             {
-                break;
-            }
+                UDP_SOCKET_INFO sktInfo;
+                TCPIP_UDP_SocketInfoGet(appData.socket, &sktInfo);
+                memset(AppBuffer, 0, sizeof(AppBuffer));
 
-            if (wMaxPut < wMaxGet)
-            {
-                wMaxGet = wMaxPut;
-            }
-            
-            // SYS_CONSOLE_PRINT("RX Buffer has %d bytes in it\n", wMaxGet);
-
-            // Process all bytes that we can
-            // This is implemented as a loop, processing up to sizeof(AppBuffer) bytes at a time.
-            // This limits memory usage while maximizing performance.  Single byte Gets and Puts are a lot slower than multibyte GetArrays and PutArrays.
-            wCurrentChunk = sizeof(AppBuffer) - 1;
-            for(w = 0; w < wMaxGet; w += sizeof(AppBuffer) - 1)
-            {
-                // Make sure the last chunk, which will likely be smaller than sizeof(AppBuffer), is treated correctly.
-                if(w + sizeof(AppBuffer) - 1 > wMaxGet)
-                    wCurrentChunk = wMaxGet - w;
-
-                // Transfer the data out of the TCP RX FIFO and into our local processing buffer.
+                // Transfer the data out of the UDP RX FIFO and into our local processing buffer.
                 int rxed = TCPIP_UDP_ArrayGet(appData.socket, AppBuffer, sizeof(AppBuffer) - 1);
 
-                SYS_CONSOLE_PRINT("\tReceived a message of '%s' and length %d\r\n", AppBuffer, rxed);
-
-                const char* source_suffix = "";
-                char ip_buffer[20];
-                TCPIP_Helper_IPAddressToString(&sktInfo.remoteIPaddress.v4Add, ip_buffer, sizeof(ip_buffer));
-                if (strcmp(ip_buffer, "192.168.100.12") == 0)
+                if (rxed > 0)
                 {
-                    source_suffix = "_from key";
+                    SYS_CONSOLE_PRINT("\tReceived a message of '%s' and length %d\r\n", AppBuffer, rxed);
+                    ProcessUdpMessage(AppBuffer, &sktInfo);
+                    // Send response messages (echo + server message)
+                    SendUdpResponse(AppBuffer, rxed);
                 }
-                else if (strcmp(ip_buffer, "192.168.100.15") == 0)
-                {
-                    source_suffix = "_from app";
-                }
-                else
-                { 
-                    source_suffix = "";
-                }
-
-                if (strcmp((char *)AppBuffer, "button111 pressed_from Client") == 0)
-                {
-                    
-                    SYS_CONSOLE_PRINT("\t\tbutton1 pressed!!!\r\n");
-                    selectImage(1, source_suffix); // Open
-                }
-                else
-                {
-                    selectImage(0, source_suffix); // Close
-                }
-            
-
-                // Perform the "ToUpper" operation on each data byte
-                for(w2 = 0; w2 < wCurrentChunk; w2++)
-                {
-                    i = AppBuffer[w2];
-                    if(i == '\x1b')   // escape
-                    {
-                        SYS_CONSOLE_MESSAGE("Connection was closed\r\n");
-                    }
-                }
-                AppBuffer[w2] = 0;
-                SYS_CONSOLE_PRINT("\tSending a message: '%s'\r\n", AppBuffer);
-
-
-                // TCPIP_UDP_DestinationIPAddressSet(appData.socket, sktInfo.addressType, (IP_MULTI_ADDRESS*)&sktInfo.remoteIPaddress);
-                // TCPIP_UDP_DestinationPortSet(appData.socket, sktInfo.remotePort);
-                TCPIP_UDP_ArrayPut(appData.socket, AppBuffer, wCurrentChunk);
-
-                
-                // send message from server - without new connection
-                char APP_Message_Buffer[255];
-                strcpy(APP_Message_Buffer, "\r\n message from server");
-
-                // 여기에서도 동일하게 목적지를 설정해 주어야 합니다.
-                // TCPIP_UDP_DestinationIPAddressSet(appData.socket, sktInfo.addressType, (IP_MULTI_ADDRESS*)&sktInfo.remoteIPaddress);
-                // TCPIP_UDP_DestinationPortSet(appData.socket, sktInfo.remotePort);
-                TCPIP_UDP_ArrayPut(appData.socket, (uint8_t*)APP_Message_Buffer, strlen(APP_Message_Buffer));
-                
-                appData.state = APP_TCPIP_WAIT_FOR_CONNECTION;
             }
-            TCPIP_UDP_Flush(appData.socket);
-//            TCPIP_UDP_Discard(appData.socket);
+            appData.state = APP_TCPIP_WAIT_FOR_CONNECTION; // Go back to waiting after processing all packets
         }
         break;
 
