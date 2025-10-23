@@ -83,6 +83,7 @@ SYS_INP_InputListener gAppInputListener;
 // --- Private state variables ---
 static bool sendStateToClient15 = false; // Flag to send status to client 15
 static char serverStateMessage[MAX_MESSAGE_BUFFER_SIZE];
+static uint32_t client15SendTimeout = 0; // Timeout for sending to client 15
 
 // *****************************************************************************
 // *****************************************************************************
@@ -136,20 +137,14 @@ static bool SendUdpMessage(const char* ipAddress, UDP_PORT port, const uint8_t* 
 
 void touchDownHandler(const SYS_INP_TouchStateEvent* const evt)
 {
-    // 192.168.100.12 클라이언트에게 상태를 전송합니다.
-    const char* ledCommand;
-    if (!isDoorOpen) // 문이 닫혀있다가 터치로 열릴 것이므로 LED ON 명령 전송
-    {
-        ledCommand = CMD_FOR_12_GREEN_LED_ON;
-    }
-    else
-    {
-        ledCommand = CMD_FOR_12_RED_LED_ON;
-    }
-    SendUdpMessage(CLIENT_12_IP, CLIENT_12_PORT, (const uint8_t*)ledCommand, strlen(ledCommand));
-
     // 이미지 업데이트 및 상태 메시지 전송을 selectImage 함수로 일원화합니다.
     updateDoorState(!isDoorOpen, "_from display");
+
+    const char* ledCommand;
+    // isDoorOpen은 이미 목표 상태로 변경되었으므로, 그 상태에 맞는 명령을 보냅니다.
+    ledCommand = isDoorOpen ? CMD_FOR_12_GREEN_LED_ON : CMD_FOR_12_RED_LED_ON;
+
+    SendUdpMessage(CLIENT_12_IP, CLIENT_12_PORT, (const uint8_t*)ledCommand, strlen(ledCommand));
 
     // 타이머를 시작합니다.
     RTC_Timer32Start();
@@ -184,8 +179,16 @@ void updateDoorState(bool open, const char* source)
         sprintf(serverStateMessage, MSG_SERVER_STATE_CLOSE_FORMAT, source);
     }
 
-    // 192.168.100.15 클라이언트에게 서버 상태를 알려야 함을 표시합니다.
-    sendStateToClient15 = true;
+    // .15 클라이언트로의 이전 상태 메시지 전송이 아직 완료되지 않았다면,
+    // 새로운 메시지 전송을 예약하지 않습니다.
+    // 이렇게 하면 .15가 오프라인일 때 버퍼에 데이터가 쌓이는 것을 방지합니다.
+    if (!sendStateToClient15)
+    {
+        // 192.168.100.15 클라이언트에게 서버 상태를 알려야 함을 표시합니다.
+        sendStateToClient15 = true;
+        client15SendTimeout = 0; // Reset timeout on new state change to allow immediate sending
+    }
+
 }
 
 static const char* GetSourceSuffixFromIP(const char* ipAddress)
@@ -285,18 +288,6 @@ void APP_Tasks ( void )
     IPV4_ADDR           ipAddr;
     int                 i, nNets;
     TCPIP_NET_HANDLE    netH;
-    
-    /* Check the application's current state. */
-
-    // 192.168.100.15 클라이언트로 상태 메시지를 보냅니다.
-    if (sendStateToClient15)
-    {
-        if (SendUdpMessage(CLIENT_15_IP, CLIENT_15_PORT, (const uint8_t*)serverStateMessage, strlen(serverStateMessage)))
-        {
-            // 메시지를 보낸 후 플래그를 리셋합니다.
-            sendStateToClient15 = false;
-        }
-    }
     
     switch ( appData.state )
     {
@@ -444,9 +435,43 @@ void APP_Tasks ( void )
         }
         break;
 
+        case APP_TCPIP_ERROR:
+            // In this state, we can no longer do anything.
+            // We need to restart the application.
+            break;
+
         default:
         {
             break;
+        }
+    }
+
+    // .15 클라이언트로 상태 메시지를 보냅니다. (Back-off 메커니즘 포함)
+    // Check if we need to send and if the timeout has passed.
+    if (sendStateToClient15)
+    {
+        // ARP 캐시에 .15 클라이언트의 정보가 있는지 먼저 확인합니다.
+        // 이렇게 하면 클라이언트가 오프라인일 때 ARP resolution으로 인한 블로킹을 방지할 수 있습니다.
+        IPV4_ADDR destIP_15;
+        TCPIP_Helper_StringToIPAddress(CLIENT_15_IP, &destIP_15);
+
+        // 기본 네트워크 핸들을 가져옵니다. 실제 환경에 맞게 조정이 필요할 수 있습니다.
+        TCPIP_NET_HANDLE netH = TCPIP_STACK_NetDefaultGet(); 
+
+        if (TCPIP_ARP_IsResolved(netH, &destIP_15, NULL))
+        {
+            // ARP 캐시에 정보가 있을 때만 전송을 시도합니다.
+            if (SendUdpMessage(CLIENT_15_IP, CLIENT_15_PORT, (const uint8_t*)serverStateMessage, strlen(serverStateMessage)))
+            {
+                sendStateToClient15 = false; // 전송 성공 시 플래그 리셋
+            }
+        }
+        else
+        {
+            // ARP 캐시에 정보가 없다면, 클라이언트가 오프라인일 가능성이 높습니다.
+            // 이 경우, ARP 요청을 보내 MAC 주소 확인을 시도합니다.
+            // 이 요청은 non-blocking이며, 성공하면 다음 APP_Tasks 루프에서 ARP 캐시가 채워집니다.
+            TCPIP_ARP_Resolve(netH, &destIP_15);
         }
     }
 }

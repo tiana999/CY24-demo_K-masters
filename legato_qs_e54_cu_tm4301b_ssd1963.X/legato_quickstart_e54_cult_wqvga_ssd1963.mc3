@@ -9799,7 +9799,7 @@
          <value>&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&lt;rtc&gt;
   &lt;rtc dnOrder=&quot;0&quot; id=&quot;RTC_MODE0_TIMER_COMPARE0&quot;&gt;
     &lt;Values dnOrder=&quot;0&quot;&gt;
-      &lt;User dnOrder=&quot;0&quot; value=&quot;512&quot;/&gt;
+      &lt;User dnOrder=&quot;0&quot; value=&quot;256&quot;/&gt;
     &lt;/Values&gt;
   &lt;/rtc&gt;
 &lt;/rtc&gt;
@@ -19179,7 +19179,7 @@
       </entry>
       <entry>
          <file>..\src\config\ssd1963_rgb565_mxt_e54\peripheral\rtc\plib_rtc_timer.c</file>
-         <hash>4af582307444bc6ca23fce0c0881e92d85f808431ab179d1913e6efc06456576</hash>
+         <hash>77b669f018397722d290cc67954e44212ddb14a186b28e339f467be876784285</hash>
       </entry>
       <entry>
          <file>..\src\config\ssd1963_rgb565_mxt_e54\peripheral\sercom\i2c_master\plib_sercom4_i2c_master.c</file>
