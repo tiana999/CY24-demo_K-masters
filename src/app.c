@@ -83,7 +83,7 @@ SYS_INP_InputListener gAppInputListener;
 // --- Private state variables ---
 static bool sendStateToClient15 = false; // Flag to send status to client 15
 static char serverStateMessage[MAX_MESSAGE_BUFFER_SIZE];
-static uint32_t client15SendTimeout = 0; // Timeout for sending to client 15
+// static uint32_t client15SendTimeout = 0; // Timeout for sending to client 15
 
 // *****************************************************************************
 // *****************************************************************************
@@ -186,7 +186,7 @@ void updateDoorState(bool open, const char* source)
     {
         // 192.168.100.15 클라이언트에게 서버 상태를 알려야 함을 표시합니다.
         sendStateToClient15 = true;
-        client15SendTimeout = 0; // Reset timeout on new state change to allow immediate sending
+        // client15SendTimeout = 0; // Reset timeout on new state change to allow immediate sending
     }
 
 }
@@ -426,6 +426,7 @@ void APP_Tasks ( void )
                 if (rxed > 0)
                 {
                     SYS_CONSOLE_PRINT("\tReceived a message of '%s' and length %d\r\n", AppBuffer, rxed);
+                    // Update server state based on the received message (key/app)
                     ProcessUdpMessage(AppBuffer, &sktInfo);
                     // Send response messages (echo + server message)
                     SendUdpResponse(AppBuffer, rxed);
@@ -471,6 +472,7 @@ void APP_Tasks ( void )
             // ARP 캐시에 정보가 없다면, 클라이언트가 오프라인일 가능성이 높습니다.
             // 이 경우, ARP 요청을 보내 MAC 주소 확인을 시도합니다.
             // 이 요청은 non-blocking이며, 성공하면 다음 APP_Tasks 루프에서 ARP 캐시가 채워집니다.
+            // -> USB 재연결 시 최신 server state를 받을 수 있음
             TCPIP_ARP_Resolve(netH, &destIP_15);
         }
     }
